@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<zabbix_export>
+    <version>4.4</version>
+    <date>2020-01-03T15:30:16Z</date>
+    <media_types>
+        <media_type>
+            <name>Zabbix-4_4-PagerDuty-Custom-Webhook-Two-Way</name>
+            <type>WEBHOOK</type>
+            <parameters>
+                <parameter>
+                    <name>dedup_key</name>
+                    <value>{EVENT.ID}-{TRIGGER.ID}-{HOSTNAME}</value>
+                </parameter>
+                <parameter>
+                    <name>apiToken</name>
+                    <value>YOUR_PD_API_TOKEN_HERE</value>
+                </parameter>
+                <parameter>
+                    <name>event_id</name>
+                    <value>{EVENT.ID}</value>
+                </parameter>
+                <parameter>
+                    <name>zabbix_api_key</name>
+                    <value>YOUR_ZABBIX_API_TOKEN_HERE</value>
+                </parameter>
+            </parameters>
+            <script>Zabbix.Log(3, 'Zabbix-4_4-PagerDuty-Custom-Webhook-Two-Way Script Entry. Value = ' + value);&#13;
+&#13;
+try {&#13;
+    var result = {&#13;
+            'tags': {}&#13;
+        },&#13;
+        mtParams = JSON.parse(value),&#13;
+        req = new CurlHttpRequest(),&#13;
+        resp;&#13;
+&#13;
+    req.AddHeader('Content-Type: application/json');&#13;
+    req.AddHeader('Authorization: Token token=' + mtParams.apiToken);&#13;
+    req.AddHeader('Accept: application/vnd.pagerduty+json;version=2');&#13;
+&#13;
+    // Get field used as dedup key for API query&#13;
+    incident_key = mtParams.dedup_key;&#13;
+&#13;
+    // Query PD API and get Incident Status&#13;
+    resp = req.Get('https://api.pagerduty.com/incidents?&amp;incident_key=' + encodeURIComponent(incident_key));&#13;
+&#13;
+    //Zabbix.Log(3,'PD API Incident Response = '+resp);&#13;
+    Zabbix.Log(3, 'PD API Incident Request Status = ' + req.Status());&#13;
+&#13;
+    if (req.Status() != 200) {&#13;
+        throw 'ERROR PAGERDUTY GET INCIDENT STATUS Response code: ' + req.Status();&#13;
+        resp = JSON.parse(resp);&#13;
+        Zabbix.Log(3, '==&gt; ERROR: PAGERDUTY GET INCIDENT STATUS RESPONSE: ' + JSON.stringify(resp));&#13;
+    }&#13;
+&#13;
+    resp = JSON.parse(resp);&#13;
+&#13;
+    // parse out incident status from payload - triggered, acknowledged or resolved&#13;
+    var incidents = resp.incidents;&#13;
+    var status = incidents[0].status;&#13;
+    var pdLink = incidents[0].html_url;&#13;
+    Zabbix.Log(3, '==&gt; PagerDuty Incident Status: ' + JSON.stringify(status));&#13;
+    Zabbix.Log(3, '==&gt; PagerDuty Incident Link: ' + JSON.stringify(pdLink));&#13;
+&#13;
+    // set up logic to process ack/resolve from PD to update Zabbix event via API&#13;
+&#13;
+    if (status == 'triggered') {&#13;
+        Zabbix.Log(3, &quot;===========&gt; Incident in Triggered State &lt;=============&quot;);&#13;
+        // set event tags&#13;
+        result.tags.PDIncidentState = status;&#13;
+        result.tags.PagerDutyLink = pdLink;&#13;
+        Zabbix.Log(3, &quot;===&gt; TRIGGERED RESULT :  &lt;===&quot; + JSON.stringify(result));&#13;
+    }&#13;
+&#13;
+    if (status == 'acknowledged') {&#13;
+        Zabbix.Log(3, &quot;===========&gt; Incident in Acknowledged State &lt;=============&quot;);&#13;
+        // set event tags&#13;
+        result.tags.PDIncidentState = status;&#13;
+        var ackBy = incidents[0].acknowledgements[0].acknowledger.summary;&#13;
+        var ackTime = incidents[0].acknowledgements[0].at;&#13;
+        result.tags.acknowledgedby = ackBy;&#13;
+        result.tags.acknowledgedtime = ackTime;&#13;
+        Zabbix.Log(3, '==&gt; PagerDuty Incident Acknowledged By: ' + ackBy);&#13;
+        Zabbix.Log(3, '==&gt; PagerDuty Incident Acknowledged At: ' + ackTime);&#13;
+        Zabbix.Log(3, &quot;===&gt; ACKNOWLEDGED RESULT :  &lt;===&quot; + JSON.stringify(result));&#13;
+&#13;
+        // set up for posting to Zabbix API&#13;
+        zabbix_req = new CurlHttpRequest();&#13;
+        zabbix_req.AddHeader('Content-Type: application/json');&#13;
+&#13;
+        // get original Event ID - needed for API payload&#13;
+        event_id = mtParams.event_id;&#13;
+        Zabbix.Log(3, &quot;==&gt; Event ID is &lt;==&quot; + event_id);&#13;
+&#13;
+        // build up the Zabbix API payload&#13;
+        zabbix_body = {};&#13;
+        zabbix_body.jsonrpc = 2.0;&#13;
+        zabbix_body.method = &quot;event.acknowledge&quot;;&#13;
+        params = {};&#13;
+        params.eventids = event_id;&#13;
+        // ack only&#13;
+        params.action = 2;&#13;
+        // ack and add a note - causes constant looping for some reason....&#13;
+        //params.action = 6;&#13;
+        params.message = &quot;Acknowledged via PagerDuty&quot;;&#13;
+        zabbix_body.params = params;&#13;
+        // need some better way to keep this? else fetch every time? Token validity is tied to auto logout for username setting, no auto logout = no expiration (afaik)&#13;
+        zabbix_body.auth = mtParams.zabbix_api_key;&#13;
+        zabbix_body.id = 0;&#13;
+        Zabbix.Log(3, &quot;==&gt; Zabbix API Body is  &lt;==&quot; + JSON.stringify(zabbix_body));&#13;
+&#13;
+        // possibly make second call to add note - with person who ack'd and what time, link to PD incident?&#13;
+&#13;
+        // try posting to Zabbix API to ack event&#13;
+        try {&#13;
+            zabbix_resp = zabbix_req.Post('http://127.0.0.1/zabbix/api_jsonrpc.php', JSON.stringify(zabbix_body));&#13;
+            if (zabbix_req.Status() != 200) {&#13;
+                throw 'ZABBIX API ACK STATUS Response code: ' + zabbix_req.Status();&#13;
+                zabbix_resp = JSON.parse(zabbix_resp);&#13;
+                Zabbix.Log(3, '==&gt; ERROR: ZABBIX SAPI ACK STATUS RESPONSE: ' + JSON.stringify(zabbix_resp));&#13;
+            }&#13;
+&#13;
+            zabbix_resp = JSON.parse(zabbix_resp);&#13;
+            Zabbix.Log(3, '==&gt;&gt; Zabbix API ACK response is : ' + JSON.stringify(zabbix_resp));&#13;
+            Zabbix.Log(3, 'Zabbix API ACK Request Status = ' + zabbix_req.Status());&#13;
+&#13;
+            // no status code response? may be a bug fixed in 4.4.1 / 5.0 Zabbix&#13;
+&#13;
+            // good api response for ack&#13;
+            // Zabbix API ACK response is : {&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;result&quot;:{&quot;eventids&quot;:[354]},&quot;id&quot;:0}&#13;
+&#13;
+            // bad api response for ack			&#13;
+            // abbix API ACK response is : {&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;error&quot;:{&quot;code&quot;:-32500,&quot;message&quot;:&quot;Application error.&quot;,&quot;data&quot;:&quot;No permissions to referred object or it does not	exist!&quot;},&quot;id&quot;:0}&#13;
+&#13;
+            // set event tags&#13;
+            result.tags.APIUpdate = JSON.stringify(zabbix_resp);&#13;
+            result.tags.PagerDutyLink = pdLink;&#13;
+&#13;
+        } catch (error) {&#13;
+            //resp = JSON.parse(resp);&#13;
+            Zabbix.Log(3, 'ERROR: ZABBIX ACK failed json : ' + JSON.stringify(zabbix_resp));&#13;
+            Zabbix.Log(3, 'ERROR: ZABBIX ACK failed : ' + JSON.stringify(error));&#13;
+            result = {};&#13;
+        }&#13;
+&#13;
+&#13;
+    } //end ack&#13;
+&#13;
+    if (status == 'resolved') {&#13;
+        Zabbix.Log(3, &quot;===========&gt; Incident in Resolved State &lt;=============&quot;);&#13;
+        // set event tags        &#13;
+        result.tags.PDIncidentState = status;&#13;
+        var rsvBy = incidents[0].last_status_change_by.summary;&#13;
+        var rsvTime = incidents[0].last_status_change_at;&#13;
+        var rsvReason = incidents[0].resolve_reason;&#13;
+        result.tags.resolvedby = rsvBy;&#13;
+        result.tags.resolvetime = rsvTime;&#13;
+        Zabbix.Log(3, '==&gt; PagerDuty Incident Resolved By: ' + rsvBy);&#13;
+        Zabbix.Log(3, '==&gt; PagerDuty Incident Resolved At: ' + rsvTime);&#13;
+&#13;
+        Zabbix.Log(3, &quot;===&gt; RESOLVED RESULT :  &lt;===&quot; + JSON.stringify(result));&#13;
+&#13;
+        // set up for posting to Zabbix API&#13;
+        zabbix_req = new CurlHttpRequest();&#13;
+        zabbix_req.AddHeader('Content-Type: application/json');&#13;
+        event_id = mtParams.event_id;&#13;
+        Zabbix.Log(3, &quot;==&gt; Event ID is &lt;==&quot; + event_id);&#13;
+        zabbix_body = {};&#13;
+        zabbix_body.jsonrpc = 2.0;&#13;
+        zabbix_body.method = &quot;event.acknowledge&quot;;&#13;
+        params = {};&#13;
+        params.eventids = event_id;&#13;
+        // resolve only&#13;
+        params.action = 1;&#13;
+        // Resolve and add a note - causes looping also&#13;
+        //params.action = 5;&#13;
+        params.message = &quot;Resolved via PagerDuty&quot;;&#13;
+        zabbix_body.params = params;&#13;
+        zabbix_body.auth = mtParams.zabbix_api_key;&#13;
+        zabbix_body.id = 0;&#13;
+        Zabbix.Log(3, &quot;===&gt; Zabbix API Body is  &lt;===&quot; + JSON.stringify(zabbix_body));&#13;
+&#13;
+        // try posting to Zabbix API to resolve event&#13;
+        try {&#13;
+            zabbix_resp = zabbix_req.Post('http://127.0.0.1/zabbix/api_jsonrpc.php', JSON.stringify(zabbix_body));&#13;
+            if (zabbix_req.Status() != 200) {&#13;
+                throw 'ZABBIX API RESOLVE STATUS Response code: ' + zabbix_req.Status();&#13;
+                zabbix_resp = JSON.parse(zabbix_resp);&#13;
+                Zabbix.Log(3, '==&gt; ERROR: ZABBIX API RESOLVE STATUS RESPONSE: ' + JSON.stringify(zabbix_resp));&#13;
+            }&#13;
+&#13;
+            zabbix_resp = JSON.parse(zabbix_resp);&#13;
+            Zabbix.Log(3, '===&gt;&gt;&gt; Zabbix API RESOLVE response is : ' + JSON.stringify(zabbix_resp));&#13;
+&#13;
+            // set event tags&#13;
+            result.tags.APIUpdate = JSON.stringify(zabbix_resp);&#13;
+            result.tags.PagerDutyLink = pdLink;&#13;
+&#13;
+        } catch (error) {&#13;
+            Zabbix.Log(3, 'ERROR: ZABBIX RESOLVE failed json : ' + JSON.stringify(zabbix_resp));&#13;
+            Zabbix.Log(3, 'ERROR: ZABBIX RESOLVE failed : ' + JSON.stringify(error));&#13;
+            result = {};&#13;
+        }&#13;
+    } // end resolve&#13;
+&#13;
+    // end main&#13;
+} catch (error) {&#13;
+    //resp = JSON.parse(resp);&#13;
+    Zabbix.Log(3, 'ERROR: PAGERDUTY GET INCIDENT STATUS RESPONSE: ' + JSON.stringify(resp));&#13;
+    Zabbix.Log(3, 'ERROR: PAGERDUTY GET INCIDENT STATUS Failed: ' + error);&#13;
+&#13;
+    result = {};&#13;
+}&#13;
+&#13;
+return JSON.stringify(result);</script>
+            <process_tags>YES</process_tags>
+            <event_menu_url>{EVENT.TAGS.PagerDutyLink}</event_menu_url>
+            <event_menu_name>PagerDuty Incident Link</event_menu_name>
+            <description>* Every 3 minutes after the Zabbix event triggers the PagerDuty incident, the webhook script will be triggered by the Zabbix action.&#13;
+&#13;
+* On the first query, if the PagerDuty incident is in a 'triggered' status, the Zabbix event is updated with the link (on the object trigger menu) to the PagerDuty incident and a status tag is added.&#13;
+&#13;
+* When the PagerDuty incident is acknowledged, the Zabbix event is acknowledged. A Zabbix event tag is added for the name of the responder who acknowledged the incident and the time and status are added.&#13;
+&#13;
+* When the PagerDuty incident is resolved, the Zabbix event is resolved. A Zabbix event tag is added for the name of the responder who resolved the incident and the time and status are added.&#13;
+</description>
+        </media_type>
+    </media_types>
+</zabbix_export>

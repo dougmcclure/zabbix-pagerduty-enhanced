@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<zabbix_export>
+    <version>4.4</version>
+    <date>2020-01-03T15:28:38Z</date>
+    <media_types>
+        <media_type>
+            <name>Zabbix-4_4-PagerDuty-Custom-Webhook</name>
+            <type>WEBHOOK</type>
+            <parameters>
+                <parameter>
+                    <name>event_name</name>
+                    <value>{EVENT.NAME}</value>
+                </parameter>
+                <parameter>
+                    <name>hostname</name>
+                    <value>{HOSTNAME}</value>
+                </parameter>
+                <parameter>
+                    <name>summary</name>
+                    <value>{EVENT.NAME} : {TRIGGER.STATUS} for {HOSTNAME}</value>
+                </parameter>
+                <parameter>
+                    <name>component</name>
+                    <value>{HOSTNAME}</value>
+                </parameter>
+                <parameter>
+                    <name>group</name>
+                    <value>Zabbix 4</value>
+                </parameter>
+                <parameter>
+                    <name>name</name>
+                    <value>{EVENT.NAME}</value>
+                </parameter>
+                <parameter>
+                    <name>id</name>
+                    <value>{TRIGGER.ID}</value>
+                </parameter>
+                <parameter>
+                    <name>status</name>
+                    <value>{TRIGGER.STATUS}</value>
+                </parameter>
+                <parameter>
+                    <name>ip</name>
+                    <value>{IPADDRESS}</value>
+                </parameter>
+                <parameter>
+                    <name>value</name>
+                    <value>{TRIGGER.VALUE}</value>
+                </parameter>
+                <parameter>
+                    <name>event_id</name>
+                    <value>{EVENT.ID}</value>
+                </parameter>
+                <parameter>
+                    <name>severity</name>
+                    <value>critical</value>
+                </parameter>
+                <parameter>
+                    <name>url</name>
+                    <value>{TRIGGER.URL}</value>
+                </parameter>
+                <parameter>
+                    <name>alert_subject</name>
+                    <value>{ALERT.SUBJECT}</value>
+                </parameter>
+                <parameter>
+                    <name>class</name>
+                    <value>Zabbix Event</value>
+                </parameter>
+                <parameter>
+                    <name>client</name>
+                    <value>Zabbix 4</value>
+                </parameter>
+                <parameter>
+                    <name>dedup_key</name>
+                    <value>{EVENT.ID}-{TRIGGER.ID}-{HOSTNAME}</value>
+                </parameter>
+                <parameter>
+                    <name>rulesetToken</name>
+                    <value>{ALERT.SENDTO}</value>
+                </parameter>
+                <parameter>
+                    <name>agent_queued_by</name>
+                    <value>pd-zabbix</value>
+                </parameter>
+                <parameter>
+                    <name>trigger_expression</name>
+                    <value>{TRIGGER.EXPRESSION}</value>
+                </parameter>
+                <parameter>
+                    <name>trigger_name</name>
+                    <value>{TRIGGER.NAME}</value>
+                </parameter>
+                <parameter>
+                    <name>trigger_description</name>
+                    <value>{TRIGGER.DESCRIPTION}</value>
+                </parameter>
+                <parameter>
+                    <name>event_tags</name>
+                    <value>{EVENT.TAGS}</value>
+                </parameter>
+                <parameter>
+                    <name>zabbix_severity</name>
+                    <value>{TRIGGER.SEVERITY}</value>
+                </parameter>
+                <parameter>
+                    <name>source</name>
+                    <value>{HOSTNAME}</value>
+                </parameter>
+                <parameter>
+                    <name>summary_prefix</name>
+                    <value>[Service : Application]</value>
+                </parameter>
+            </parameters>
+            <script>Zabbix.Log(3, 'Zabbix-4_4-PagerDuty-Custom-Webhook Script Entry. Value = '+value);&#13;
+&#13;
+try {&#13;
+	// optionally return event tags to Zabbix&#13;
+        var result = {&#13;
+		'tags': {}&#13;
+	},&#13;
+	params = JSON.parse(value),&#13;
+	req = new CurlHttpRequest(),&#13;
+	resp;&#13;
+&#13;
+        // define required PagerDuty Event API v2 Headers&#13;
+	req.AddHeader('Content-Type: application/json');&#13;
+	req.AddHeader('X-Routing-Key: '+params.rulesetToken);&#13;
+&#13;
+        // define required PagerDuty Event API v2 payload        &#13;
+        body = {};&#13;
+        payload = {};&#13;
+        custom_details = {};&#13;
+&#13;
+        // Event API v2 custom details - add any desired macros here&#13;
+        custom_details.hostname = params.hostname;&#13;
+        custom_details.event_name = params.name;&#13;
+        custom_details.id = params.id;&#13;
+        custom_details.status = params.status;&#13;
+        custom_details.ip = params.ip;&#13;
+        custom_details.value = params.value;&#13;
+        custom_details.event_id = params.event_id;&#13;
+        custom_details.zabbix_severity = params.zabbix_severity;&#13;
+        custom_details.trigger_expression = params.trigger_expression;&#13;
+        custom_details.trigger_name = params.trigger_name;&#13;
+        custom_details.trigger_description = params.trigger_description;&#13;
+        custom_details.event_tags = params.event_tags;&#13;
+&#13;
+        // Event API v2 payload&#13;
+        payload.custom_details = custom_details;&#13;
+        payload.severity = params.severity;&#13;
+        // Add business aligned prefix here for context (eg service or application macro)&#13;
+	payload.summary = params.summary_prefix +&quot; : &quot;+params.summary;&#13;
+        // PagerDuty CEF fields (show up on Alerts tab)&#13;
+	payload.source = params.hostname;&#13;
+	payload.component = params.component;&#13;
+	payload.group = params.group;&#13;
+        payload.class = params.class;&#13;
+&#13;
+        // Event API v2 body&#13;
+        body.client = params.client;&#13;
+        body.event_action = params.alert_subject;&#13;
+        body.dedup_key = params.dedup_key;&#13;
+        body.client_url = params.url;&#13;
+        body.images = [];&#13;
+        body.links = [];&#13;
+        body.payload = payload;&#13;
+&#13;
+        // Post Zabbix event to PagerDuty Event API v2&#13;
+	resp = req.Post('https://events.pagerduty.com/v2/enqueue',JSON.stringify(body));&#13;
+&#13;
+	if (req.Status() != 202) {&#13;
+	     throw 'ERROR Posting Event: Response code: '+req.Status();&#13;
+	}&#13;
+&#13;
+	resp = JSON.parse(resp);&#13;
+        Zabbix.Log(3, 'PagerDuty Event API v2 Response: '+JSON.stringify(resp));&#13;
+&#13;
+        // set an event tag for Zabbix event&#13;
+        result.tags.PagerDutyEventStatus = resp.status;&#13;
+&#13;
+} catch (error) {&#13;
+	Zabbix.Log(3, 'ERROR: PagerDuty Event API v2 Response: '+JSON.stringify({&quot;body&quot;: body}));&#13;
+	Zabbix.Log(3, 'ERROR: PagerDuty Event API v2 Response:: '+error);&#13;
+        result = {};&#13;
+}&#13;
+ &#13;
+return JSON.stringify(result);</script>
+            <process_tags>YES</process_tags>
+            <show_event_menu>NO</show_event_menu>
+            <description>Zabbix 4.4+ Webhook Media Type to PagerDuty Event API v2 and Rulesets&#13;
+&#13;
+Media Type Customization Options&#13;
+&#13;
+- Add additional Zabbix macros&#13;
+--&gt; Add to both the parameter and to the script (into the appropriate event payload section and field&#13;
+&#13;
+- Customize the PagerDuty Common Event Format (CEF) Fields. These show up on the PagerDuty Alerts tab in the UI and are useful for quick sorting and filtering.&#13;
+--&gt; Source - {HOSTNAME} (default)&#13;
+--&gt; Component - {HOSTNAME} (default)&#13;
+--&gt; Group - Zabbix 4 (default)&#13;
+--&gt;Class - Zabbix Event (default)&#13;
+&#13;
+- Severity - As Zabbix events don’t use the same event severity classifications required by PagerDuty, set the default severity level for all PagerDuty alerts. This can be critical, error, warning or informational. You can use ruleset rules to set a more appropriate severity during alert onboarding.&#13;
+&#13;
+- summary_prefix  : Create a business-aligned prefix for all PagerDuty incident title/description. This is ideally a Zabbix macro that contains the name of the service, application or other business aligned function monitored by Zabbix. This is the first thing seen in PagerDuty web or mobile app UI and notifications.</description>
+        </media_type>
+    </media_types>
+</zabbix_export>
